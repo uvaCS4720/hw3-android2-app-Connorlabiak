@@ -1,23 +1,24 @@
 package edu.nd.pmcburne.hwapp.one
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DatePickerState
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,29 +28,71 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import edu.nd.pmcburne.hwapp.one.ui.theme.HWStarterRepoTheme
+import java.time.Instant
+import java.time.ZoneId
 
 class MainActivity : ComponentActivity() {
+    val viewModel: MainViewModel by viewModels()
+
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
+            val currentList by viewModel.currentList.collectAsStateWithLifecycle()
+            val isMen by viewModel.isMen.collectAsStateWithLifecycle()
+            val curDate by viewModel.curDate.collectAsStateWithLifecycle()
+            val showDatePicker by viewModel.showDatePicker.collectAsStateWithLifecycle()
+            val datePickerState = rememberDatePickerState(
+                initialSelectedDateMillis = curDate
+                    .atStartOfDay(ZoneId.of("UTC"))
+                    .toInstant()
+                    .toEpochMilli()
+            )
+            val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
             HWStarterRepoTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Surface(
-                        modifier = Modifier.fillMaxSize().padding(innerPadding),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding),
                         color = MaterialTheme.colorScheme.background
-                    ) { Toolbar() }
+                    ) {
+                        Column {
+                            Toolbar(
+                                isMen = isMen,
+                                curDatePickerState = datePickerState,
+                                showDatePicker = showDatePicker,
+                                onGenderChange = { viewModel.toggleIsMen() },
+                                onDateChange = { viewModel.setNewDate(datePickerState.selectedDateMillis) },
+                                onToggleDataPickerState = {
+                                    viewModel.toggleDatePicker()
+                                },
+                                onRefresh = {
+                                    viewModel.updateGames(
+                                        gender = if (isMen) "men" else "women",
+                                        date = curDate
+                                    )
+                                },
+                                isLoading = isLoading
+                            )
+                            if (currentList.isEmpty()) {
+                                Text("No Games to Display", modifier = Modifier.align(Alignment.CenterHorizontally))
+                            }
+                            else
+                                GamesList(currentList)
+                        }
+                    }
                 }
             }
         }
@@ -59,16 +102,7 @@ class MainActivity : ComponentActivity() {
     fun GamesList(list: List<Game>) {
         LazyColumn(modifier = Modifier.padding(14.dp)) {
             itemsIndexed(items = list) { index, item ->
-                GamePane(
-                    Game(
-                        home = "UVA",
-                        homeScore = 111,
-                        away = "UNC",
-                        awayScore = 101,
-                        progress = "Finished",
-                        winner = "UVA"
-                    )
-                )
+                GamePane(item)
             }
 
         }
@@ -77,8 +111,11 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun GamePane(game: Game) {
         Surface(
-            shape = MaterialTheme.shapes.large,
-            shadowElevation = 1.dp,
+            modifier = Modifier.padding(vertical = 6.dp),
+            shape = MaterialTheme.shapes.medium,
+            shadowElevation = 2.dp,
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(modifier = Modifier.padding(4.dp)) {
                 Row {
@@ -87,65 +124,100 @@ class MainActivity : ComponentActivity() {
 
                     )
                     Spacer(modifier = Modifier.weight(1f))
-                    if (game.progress == "Finished")
-                        Text("Final - " + game.winner + " won!")
-                    if (game.progress == "Upcoming")
+                    if (game.gameState == "final")
+                        Text("Final")
+                    if (game.gameState == "pre")
                         Text(game.startTime ?: "Unknown")
-                    if (game.progress == "In Progress")
+                    if (game.gameState == "live")
                         Text((game.curPeriod?:"//") + " " + game.timeRem)
 
                 }
-                Text(
-                    text = game.home + " " + game.homeScore,
-                    modifier = Modifier.padding(top = 7.dp).padding(start = 25.dp)
-                )
-                Text(
-                    text = game.away + " " + game.awayScore,
-                    modifier = Modifier.padding(start = 25.dp)
-                )
+                if (game.winner == null) {
+                    Text(
+                        text = game.home + " " + game.homeScore,
+                        modifier = Modifier
+                            .padding(top = 7.dp)
+                            .padding(start = 25.dp)
+                    )
+                    Text(
+                        text = game.away + " " + game.awayScore,
+                        modifier = Modifier.padding(start = 25.dp)
+                    )
+                }
+                else {
+                    Text(
+                        text = game.home + " " + game.homeScore + if (game.winner == game.home) "\uD83C\uDFC6" else "",
+                        modifier = Modifier
+                            .padding(top = 7.dp)
+                            .padding(start = 25.dp)
+                    )
+                    Text(
+                        text = game.away + " " + game.awayScore + if (game.winner == game.away) "\uD83C\uDFC6" else "",
+                        modifier = Modifier.padding(start = 25.dp)
+                    )
+                }
             }
         }
     }
 
-    @Preview
-    @Composable
-    fun GamePanePreview() {
-        GamePane(Game(
-            home = "UVA",
-            homeScore =  111,
-            away = "UNC",
-            awayScore = 101,
-            progress = "Finished",
-            winner = "UVA"
-        ))
-    }
-
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
-    fun Toolbar() {
-        var isMen by remember { mutableStateOf(true) }
-        var curDatePickerState = rememberDatePickerState()
-        var showDatePicker by remember { mutableStateOf(false) }
+    fun Toolbar(
+        isLoading: Boolean,
+        isMen: Boolean,
+        curDatePickerState: DatePickerState,
+        showDatePicker: Boolean,
+        onGenderChange: () -> Unit,
+        onDateChange: () -> Unit,
+        onToggleDataPickerState: () -> Unit,
+        onRefresh: () -> Unit
+    ) {
         TopAppBar(
-            title = { Text("Scoreboard") },
+            modifier = Modifier.height(100.dp),
+            title = { Text("Scoreboard for ${
+                Instant.ofEpochMilli(curDatePickerState.selectedDateMillis?: 0)
+                .atZone(ZoneId.of("UTC"))
+                .toLocalDate()
+            }") },
             actions = {
-                MenWomenButton(isMen) { newBool -> isMen = newBool }
+                MenWomenButton(isMen) {onGenderChange()}
                 DatePicker(
                     showDate = showDatePicker,
                     curState = curDatePickerState,
-                    onDateSelected = { newDateState -> curDatePickerState = newDateState },
-                    onDismiss = { showDatePicker = !showDatePicker }
+                    onDismiss = {
+                        onToggleDataPickerState()
+                        onDateChange()
+                    },
+                    onShow = {onToggleDataPickerState()}
                 )
-                RefreshButton {}
-            }
+                Box(
+                    modifier = Modifier.size(48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    } else {
+                        RefreshButton { onRefresh() }
+                    }
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+            )
         )
     }
 
     @Composable
-    fun MenWomenButton(isMen: Boolean, onClick: (Boolean) -> Unit) {
+    fun MenWomenButton(isMen: Boolean, onClick: () -> Unit) {
         IconButton(
             onClick = {
-                onClick(!isMen)
+                onClick()
             },
             content = {
                 if (isMen)
@@ -168,32 +240,26 @@ class MainActivity : ComponentActivity() {
     fun DatePicker(
         showDate: Boolean,
         curState: DatePickerState,
-        onDateSelected: (DatePickerState) -> Unit,
-        onDismiss: () -> Unit
+        onDismiss: () -> Unit,
+        onShow: () -> Unit
     ) {
         if (showDate) {
             DatePickerDialog(
                 onDismissRequest = onDismiss,
                 confirmButton = {
                     TextButton(onClick = {
-                        onDateSelected(curState)
                         onDismiss()
                     }) {
                         Text("OK")
                     }
                 },
-                dismissButton = {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancel")
-                    }
-                }
             ) {
                 DatePicker(state = curState)
             }
         }
         IconButton(
             onClick = {
-                onDismiss()
+                onShow()
             },
             content = {
                 Icon(
